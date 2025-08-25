@@ -122,39 +122,42 @@ func (s *QUICNameServer) sendQuery(ctx context.Context, noResponseErrCh chan<- e
 			}
 			b.Release()
 
-			conn, err := s.openStream(dnsCtx)
+			stream, err := s.openStream(dnsCtx)
 			if err != nil {
 				errors.LogErrorInner(ctx, err, "failed to open quic connection")
 				noResponseErrCh <- err
 				return
 			}
+			defer func() {
+				stream.CancelRead(0)
+				_ = stream.Close()
+			}()
 
-			_, err = conn.Write(dnsReqBuf.Bytes())
-			if err != nil {
+			if _, err = stream.Write(dnsReqBuf.Bytes()); err != nil {
 				errors.LogErrorInner(ctx, err, "failed to send query")
 				noResponseErrCh <- err
 				return
 			}
 
-			_ = conn.Close()
+			dnsReqBuf.Release()
+			_ = stream.Close()
 
 			respBuf := buf.New()
 			defer respBuf.Release()
-			n, err := respBuf.ReadFullFrom(conn, 2)
+			n, err := respBuf.ReadFullFrom(stream, 2)
 			if err != nil && n == 0 {
 				errors.LogErrorInner(ctx, err, "failed to read response length")
 				noResponseErrCh <- err
 				return
 			}
 			var length int16
-			err = binary.Read(bytes.NewReader(respBuf.Bytes()), binary.BigEndian, &length)
-			if err != nil {
+			if err = binary.Read(bytes.NewReader(respBuf.Bytes()), binary.BigEndian, &length); err != nil {
 				errors.LogErrorInner(ctx, err, "failed to parse response length")
 				noResponseErrCh <- err
 				return
 			}
 			respBuf.Clear()
-			n, err = respBuf.ReadFullFrom(conn, int32(length))
+			n, err = respBuf.ReadFullFrom(stream, int32(length))
 			if err != nil && n == 0 {
 				errors.LogErrorInner(ctx, err, "failed to read response length")
 				noResponseErrCh <- err
