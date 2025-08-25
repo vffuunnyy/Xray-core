@@ -215,6 +215,15 @@ func (m *ClientWorker) GetTimer() *time.Ticker {
 	return m.timer
 }
 
+// Close terminates the client worker and releases its resources.
+func (m *ClientWorker) Close() error {
+	m.sessionManager.Close()
+	common.Close(m.link.Writer)
+	common.Interrupt(m.link.Reader)
+	m.timer.Stop()
+	return m.done.Close()
+}
+
 func (m *ClientWorker) monitor() {
 	defer m.timer.Stop()
 

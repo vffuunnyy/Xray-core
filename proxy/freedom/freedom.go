@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/rand"
 	"io"
+	"sync/atomic"
 	"time"
 
 	"github.com/pires/go-proxyproto"
@@ -356,6 +357,8 @@ func NewPacketWriter(conn net.Conn, h *Handler, UDPOverride net.Destination, Dia
 	return &buf.SequentialWriter{Writer: conn}
 }
 
+const resolvedUDPAddrLimit = 64
+
 type PacketWriter struct {
 	*internet.PacketConnWrapper
 	stats.Counter
@@ -367,7 +370,19 @@ type PacketWriter struct {
 	// Resulting in these packets being sent to many different IPs randomly
 	// So, cache and keep the resolve result
 	ResolvedUDPAddr *utils.TypedSyncMap[string, net.Address]
+	resolvedCount   uint32
 	LocalAddr       net.Address
+}
+
+func (w *PacketWriter) storeResolved(domain string, ip net.Address) {
+	if ip == nil {
+		return
+	}
+	if atomic.AddUint32(&w.resolvedCount, 1) > resolvedUDPAddrLimit {
+		w.ResolvedUDPAddr.Clear()
+		atomic.StoreUint32(&w.resolvedCount, 1)
+	}
+	w.ResolvedUDPAddr.Store(domain, ip)
 }
 
 func (w *PacketWriter) WriteMultiBuffer(mb buf.MultiBuffer) error {
@@ -387,14 +402,14 @@ func (w *PacketWriter) WriteMultiBuffer(mb buf.MultiBuffer) error {
 				b.UDP.Port = w.UDPOverride.Port
 			}
 			if b.UDP.Address.Family().IsDomain() {
-				if ip, ok := w.ResolvedUDPAddr.Load(b.UDP.Address.Domain()); ok {
-					b.UDP.Address = ip
+				if cached, ok := w.ResolvedUDPAddr.Load(b.UDP.Address.Domain()); ok {
+					b.UDP.Address = cached
 				} else {
+					var ip net.Address
 					ShouldUseSystemResolver := true
 					if w.Handler.config.DomainStrategy.HasStrategy() {
 						ips, err := internet.LookupForIP(b.UDP.Address.Domain(), w.Handler.config.DomainStrategy, w.LocalAddr)
 						if err != nil {
-							// drop packet if resolve failed when forceIP
 							if w.Handler.config.DomainStrategy.ForceIP() {
 								b.Release()
 								continue
@@ -409,12 +424,12 @@ func (w *PacketWriter) WriteMultiBuffer(mb buf.MultiBuffer) error {
 						if err != nil {
 							b.Release()
 							continue
-						} else {
-							ip = net.IPAddress(udpAddr.IP)
 						}
+						ip = net.IPAddress(udpAddr.IP)
 					}
 					if ip != nil {
-						b.UDP.Address, _ = w.ResolvedUDPAddr.LoadOrStore(b.UDP.Address.Domain(), ip)
+						w.storeResolved(b.UDP.Address.Domain(), ip)
+						b.UDP.Address = ip
 					}
 				}
 			}

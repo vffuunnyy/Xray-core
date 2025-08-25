@@ -191,7 +191,7 @@ func (h *Handler) Process(ctx context.Context, link *transport.Link, d internet.
 					for _, blocktype := range h.blockTypes {
 						if blocktype == int32(qType) {
 							if h.nonIPQuery == "reject" {
-								go h.rejectNonIPQuery(id, qType, domain, writer)
+								h.rejectNonIPQuery(id, qType, domain, writer)
 							}
 							errors.LogInfo(ctx, "blocked type ", qType, " query for domain ", domain)
 							return nil
@@ -206,7 +206,7 @@ func (h *Handler) Process(ctx context.Context, link *transport.Link, d internet.
 					continue
 				}
 				if h.nonIPQuery == "reject" {
-					go h.rejectNonIPQuery(id, qType, domain, writer)
+					h.rejectNonIPQuery(id, qType, domain, writer)
 					b.Release()
 					continue
 				}
